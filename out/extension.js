@@ -6,6 +6,7 @@ const vscode = require("vscode");
 const panel_1 = require("./panel");
 const participantStore_1 = require("./participantStore");
 const sectionsLoader_1 = require("./sectionsLoader");
+const webhookReporter_1 = require("./webhookReporter");
 let statusBarItem;
 let panel;
 async function activate(context) {
@@ -35,18 +36,30 @@ async function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand("workshopTracker.resetProgress", async () => {
         const confirm = await vscode.window.showWarningMessage("Reset all workshop progress?", { modal: true }, "Reset");
         if (confirm === "Reset") {
+            const participant = store.getParticipant();
             await store.resetProgress();
             updateStatusBar(store, sectionsLoader);
             panel?.refresh();
             vscode.window.showInformationMessage("Workshop progress reset.");
+            // Remove this participant's rows from the Google Sheet
+            const reporter = new webhookReporter_1.WebhookReporter();
+            reporter.reportReset({
+                participant,
+                codespace: webhookReporter_1.WebhookReporter.getCodespaceName()
+            });
         }
     }));
     // ── Watch for sections file changes ─────────────────────────
     const watcher = vscode.workspace.createFileSystemWatcher("**/workshop-sections.json");
     watcher.onDidChange(async () => {
-        sectionsLoader.invalidate();
-        updateStatusBar(store, sectionsLoader);
-        panel?.refreshSections(await sectionsLoader.load());
+        try {
+            sectionsLoader.invalidate();
+            updateStatusBar(store, sectionsLoader);
+            panel?.refreshSections(await sectionsLoader.load());
+        }
+        catch (err) {
+            console.warn("[WorkshopTracker] Failed to reload sections:", err);
+        }
     });
     context.subscriptions.push(watcher);
 }

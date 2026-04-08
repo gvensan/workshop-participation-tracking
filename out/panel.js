@@ -59,11 +59,17 @@ class WorkshopPanel {
                     }
                 }
                 else {
-                    await this.store.markUncompleted(msg.sectionId);
-                    this.reporter.report({
-                        participant, section: this.sections[sectionIdx], action: "unchecked",
-                        codespace, workshop: ""
-                    });
+                    // Cascade: uncheck the toggled section and all sections after it
+                    for (let i = sectionIdx; i < this.sections.length; i++) {
+                        const s = this.sections[i];
+                        if (this.store.isCompleted(s.id)) {
+                            await this.store.markUncompleted(s.id);
+                            this.reporter.report({
+                                participant, section: s, action: "unchecked",
+                                codespace, workshop: ""
+                            });
+                        }
+                    }
                 }
                 this.progressChangedEmitter.fire();
                 this.render();
@@ -121,6 +127,7 @@ class WorkshopPanel {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <title>Workshop Tracker</title>
 <style>
   :root {
@@ -322,6 +329,10 @@ class WorkshopPanel {
   const vscode    = acquireVsCodeApi();
   const sections  = ${sectionsJson};
 
+  function esc(str) {
+    return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
   function renderSections() {
     const list = document.getElementById("sectionsList");
     list.innerHTML = sections.map((s, i) => \`
@@ -330,8 +341,8 @@ class WorkshopPanel {
                onclick="event.stopPropagation(); toggleSection('\${s.id}')" />
         <div class="section-body">
           <div class="section-number">Section \${i + 1}</div>
-          <div class="section-title">\${s.title}</div>
-          \${s.description ? \`<div class="section-desc">\${s.description}</div>\` : ""}
+          <div class="section-title">\${esc(s.title)}</div>
+          \${s.description ? \`<div class="section-desc">\${esc(s.description)}</div>\` : ""}
         </div>
         \${s.done ? '<span class="done-badge">✓ Done</span>' : ""}
       </div>
@@ -339,11 +350,20 @@ class WorkshopPanel {
   }
 
   function toggleSection(id) {
-    const s = sections.find(x => x.id === id);
-    if (!s) return;
-    s.done = !s.done;
+    const idx = sections.findIndex(x => x.id === id);
+    if (idx === -1) return;
+    const newState = !sections[idx].done;
+
+    if (newState) {
+      // Cascade forward: mark all up to and including this one
+      for (let i = 0; i <= idx; i++) sections[i].done = true;
+    } else {
+      // Cascade backward: unmark this and all after it
+      for (let i = idx; i < sections.length; i++) sections[i].done = false;
+    }
+
     renderSections();
-    vscode.postMessage({ type: "sectionToggle", sectionId: id, checked: s.done });
+    vscode.postMessage({ type: "sectionToggle", sectionId: id, checked: newState });
   }
 
   function saveIdentity() {
@@ -371,13 +391,6 @@ class WorkshopPanel {
   // Messages from extension host
   window.addEventListener("message", e => {
     const msg = e.data;
-
-    if (msg.type === "progressUpdate") {
-      const pct = msg.total ? Math.round((msg.completed / msg.total) * 100) : 0;
-      document.getElementById("progressBar").style.width = pct + "%";
-      document.getElementById("progressLabel").textContent =
-        \`\${msg.completed} of \${msg.total} sections completed\`;
-    }
 
     if (msg.type === "gitConfigIdentity") {
       const nameInput = document.getElementById("inputName");

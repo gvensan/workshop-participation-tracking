@@ -1,9 +1,8 @@
 import * as vscode from "vscode";
-import * as fs from "fs";
-import * as path from "path";
 import { WorkshopPanel } from "./panel";
 import { ParticipantStore } from "./participantStore";
 import { SectionsLoader } from "./sectionsLoader";
+import { WebhookReporter } from "./webhookReporter";
 
 let statusBarItem: vscode.StatusBarItem;
 let panel: WorkshopPanel | undefined;
@@ -48,10 +47,18 @@ export async function activate(context: vscode.ExtensionContext) {
         "Reset"
       );
       if (confirm === "Reset") {
+        const participant = store.getParticipant();
         await store.resetProgress();
         updateStatusBar(store, sectionsLoader);
         panel?.refresh();
         vscode.window.showInformationMessage("Workshop progress reset.");
+
+        // Remove this participant's rows from the Google Sheet
+        const reporter = new WebhookReporter();
+        reporter.reportReset({
+          participant,
+          codespace: WebhookReporter.getCodespaceName()
+        });
       }
     })
   );
@@ -61,9 +68,13 @@ export async function activate(context: vscode.ExtensionContext) {
     "**/workshop-sections.json"
   );
   watcher.onDidChange(async () => {
-    sectionsLoader.invalidate();
-    updateStatusBar(store, sectionsLoader);
-    panel?.refreshSections(await sectionsLoader.load());
+    try {
+      sectionsLoader.invalidate();
+      updateStatusBar(store, sectionsLoader);
+      panel?.refreshSections(await sectionsLoader.load());
+    } catch (err) {
+      console.warn("[WorkshopTracker] Failed to reload sections:", err);
+    }
   });
   context.subscriptions.push(watcher);
 }
