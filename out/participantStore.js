@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ParticipantStore = void 0;
 const vscode = require("vscode");
+const child_process_1 = require("child_process");
 class ParticipantStore {
     constructor(context) {
         this.context = context;
@@ -25,12 +26,31 @@ class ParticipantStore {
         if (p.githubEmail !== undefined)
             await this.context.globalState.update("wt.githubEmail", p.githubEmail);
     }
+    // ── Git config identity (always available in Codespaces) ─────
+    async tryFetchGitConfig() {
+        try {
+            const name = (0, child_process_1.execSync)("git config user.name", { encoding: "utf8" }).trim();
+            const email = (0, child_process_1.execSync)("git config user.email", { encoding: "utf8" }).trim();
+            // Auto-fill name/email if the user hasn't manually set them
+            const current = this.getParticipant();
+            if (!current.name && name)
+                await this.saveParticipant({ name });
+            if (!current.email && email)
+                await this.saveParticipant({ email });
+            return { name, email };
+        }
+        catch {
+            return { name: "", email: "" };
+        }
+    }
     // ── GitHub auth (best-effort, non-blocking) ──────────────────
     async tryFetchGitHubIdentity() {
         try {
             const session = await vscode.authentication.getSession("github", ["user:email", "read:user"], { createIfNone: false, silent: true });
-            if (!session)
-                return { user: "", email: "" };
+            if (!session) {
+                // Fall back to git config
+                return await this.gitConfigAsGitHubFallback();
+            }
             const user = session.account.label ?? "";
             const email = session.account.id
                 ? await this.fetchGitHubEmail(session.accessToken)
@@ -39,8 +59,18 @@ class ParticipantStore {
             return { user, email };
         }
         catch {
-            return { user: "", email: "" };
+            return await this.gitConfigAsGitHubFallback();
         }
+    }
+    async gitConfigAsGitHubFallback() {
+        const git = await this.tryFetchGitConfig();
+        if (git.name || git.email) {
+            await this.saveParticipant({
+                githubUser: git.name,
+                githubEmail: git.email
+            });
+        }
+        return { user: git.name, email: git.email };
     }
     async fetchGitHubEmail(token) {
         try {

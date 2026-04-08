@@ -42,6 +42,29 @@ class WebhookReporter {
             console.warn("[WorkshopTracker] Webhook post failed:", err);
         }
     }
+    async reportReset(event) {
+        const url = this.getWebhookUrl();
+        if (!url)
+            return;
+        const payload = {
+            action: "reset",
+            workshop: this.getWorkshopName(),
+            codespace: event.codespace,
+            githubUser: event.participant.githubUser || event.participant.name || "unknown",
+            name: event.participant.name || event.participant.githubUser || "",
+            email: event.participant.email || event.participant.githubEmail || ""
+        };
+        try {
+            await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+        }
+        catch (err) {
+            console.warn("[WorkshopTracker] Webhook reset failed:", err);
+        }
+    }
     static getCodespaceName() {
         return process.env["CODESPACE_NAME"] ?? process.env["HOSTNAME"] ?? "local";
     }

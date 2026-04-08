@@ -21,6 +21,14 @@ function doPost(e) {
     const payload = JSON.parse(e.postData.contents);
     const sheet = getOrCreateSheet();
     
+    // Handle reset: delete all rows for this participant + codespace
+    if (payload.action === "reset") {
+      deleteRowsForParticipant(sheet, payload);
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: true, action: "reset" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     sheet.appendRow([
       new Date().toISOString(),
       payload.workshop   || "",
@@ -79,4 +87,28 @@ function getOrCreateSheet() {
   }
 
   return sheet;
+}
+
+function deleteRowsForParticipant(sheet, payload) {
+  const data = sheet.getDataRange().getValues();
+  const pGithubUser = (payload.githubUser || "").toLowerCase().trim();
+  const pName       = (payload.name       || "").toLowerCase().trim();
+  const pEmail      = (payload.email      || "").toLowerCase().trim();
+
+  // Walk rows bottom-up so deletions don't shift indices
+  for (let i = data.length - 1; i >= 1; i--) {  // skip header row
+    const rowGithubUser = (data[i][3] || "").toString().toLowerCase().trim();  // column D
+    const rowName       = (data[i][4] || "").toString().toLowerCase().trim();  // column E
+    const rowEmail      = (data[i][5] || "").toString().toLowerCase().trim();  // column F
+
+    // Match if ANY identifier overlaps — covers cases where name/email changed between events
+    const match =
+      (pGithubUser && rowGithubUser === pGithubUser) ||
+      (pEmail      && rowEmail      === pEmail)      ||
+      (pName       && rowName       === pName);
+
+    if (match) {
+      sheet.deleteRow(i + 1);  // Sheets rows are 1-indexed
+    }
+  }
 }

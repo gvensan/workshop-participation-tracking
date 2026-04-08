@@ -40,46 +40,61 @@ class WorkshopPanel {
                 break;
             }
             case "sectionToggle": {
-                const section = this.sections.find(s => s.id === msg.sectionId);
-                if (!section)
+                const sectionIdx = this.sections.findIndex(s => s.id === msg.sectionId);
+                if (sectionIdx === -1)
                     break;
-                const action = msg.checked ? "completed" : "unchecked";
+                const participant = this.store.getParticipant();
+                const codespace = webhookReporter_1.WebhookReporter.getCodespaceName();
                 if (msg.checked) {
-                    await this.store.markCompleted(msg.sectionId);
+                    // Cascade: mark all sections up to and including the toggled one
+                    for (let i = 0; i <= sectionIdx; i++) {
+                        const s = this.sections[i];
+                        if (!this.store.isCompleted(s.id)) {
+                            await this.store.markCompleted(s.id);
+                            this.reporter.report({
+                                participant, section: s, action: "completed",
+                                codespace, workshop: ""
+                            });
+                        }
+                    }
                 }
                 else {
                     await this.store.markUncompleted(msg.sectionId);
+                    this.reporter.report({
+                        participant, section: this.sections[sectionIdx], action: "unchecked",
+                        codespace, workshop: ""
+                    });
                 }
                 this.progressChangedEmitter.fire();
-                // Fire-and-forget POST to Google Sheets
-                const participant = this.store.getParticipant();
-                await this.reporter.report({
-                    participant,
-                    section,
-                    action,
-                    codespace: webhookReporter_1.WebhookReporter.getCodespaceName(),
-                    workshop: "" // resolved inside reporter from config
-                });
-                // Update progress bar without full re-render
-                const completed = this.store.getCompletedCount();
-                const total = this.sections.length;
-                this.panel.webview.postMessage({
-                    type: "progressUpdate",
-                    completed,
-                    total
-                });
+                this.render();
                 break;
             }
             case "resetProgress": {
+                const participant = this.store.getParticipant();
                 await this.store.resetProgress();
                 this.progressChangedEmitter.fire();
                 this.render();
+                // Remove this participant's rows from the Google Sheet
+                this.reporter.reportReset({
+                    participant,
+                    codespace: webhookReporter_1.WebhookReporter.getCodespaceName()
+                });
                 break;
             }
         }
     }
     // ── GitHub identity init ─────────────────────────────────────
     async initGitHubIdentity() {
+        // First, pull git config (always available in Codespaces)
+        const git = await this.store.tryFetchGitConfig();
+        if (git.name || git.email) {
+            this.panel.webview.postMessage({
+                type: "gitConfigIdentity",
+                gitName: git.name,
+                gitEmail: git.email
+            });
+        }
+        // Then try GitHub OAuth for the username
         const gh = await this.store.tryFetchGitHubIdentity();
         if (gh.user) {
             this.panel.webview.postMessage({
@@ -88,6 +103,8 @@ class WorkshopPanel {
                 githubEmail: gh.email
             });
         }
+        // Re-render with populated fields
+        this.render();
     }
     // ── HTML render ──────────────────────────────────────────────
     render() {
@@ -360,6 +377,15 @@ class WorkshopPanel {
       document.getElementById("progressBar").style.width = pct + "%";
       document.getElementById("progressLabel").textContent =
         \`\${msg.completed} of \${msg.total} sections completed\`;
+    }
+
+    if (msg.type === "gitConfigIdentity") {
+      const nameInput = document.getElementById("inputName");
+      const emailInput = document.getElementById("inputEmail");
+      if (nameInput && !nameInput.value)  nameInput.value = msg.gitName  || "";
+      if (emailInput && !emailInput.value) emailInput.value = msg.gitEmail || "";
+      document.getElementById("ghHint").innerHTML =
+        \`Git: <strong>\${msg.gitName}</strong> &lt;\${msg.gitEmail}&gt; — auto-detected from git config\`;
     }
 
     if (msg.type === "githubIdentity") {

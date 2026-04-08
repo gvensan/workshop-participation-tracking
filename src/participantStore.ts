@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { execSync } from "child_process";
 
 export interface Participant {
   name: string;
@@ -32,6 +33,24 @@ export class ParticipantStore {
     if (p.githubEmail!== undefined) await this.context.globalState.update("wt.githubEmail", p.githubEmail);
   }
 
+  // ── Git config identity (always available in Codespaces) ─────
+
+  async tryFetchGitConfig(): Promise<{ name: string; email: string }> {
+    try {
+      const name  = execSync("git config user.name",  { encoding: "utf8" }).trim();
+      const email = execSync("git config user.email", { encoding: "utf8" }).trim();
+
+      // Auto-fill name/email if the user hasn't manually set them
+      const current = this.getParticipant();
+      if (!current.name && name)   await this.saveParticipant({ name });
+      if (!current.email && email) await this.saveParticipant({ email });
+
+      return { name, email };
+    } catch {
+      return { name: "", email: "" };
+    }
+  }
+
   // ── GitHub auth (best-effort, non-blocking) ──────────────────
 
   async tryFetchGitHubIdentity(): Promise<{ user: string; email: string }> {
@@ -41,7 +60,10 @@ export class ParticipantStore {
         ["user:email", "read:user"],
         { createIfNone: false, silent: true }
       );
-      if (!session) return { user: "", email: "" };
+      if (!session) {
+        // Fall back to git config
+        return await this.gitConfigAsGitHubFallback();
+      }
 
       const user  = session.account.label ?? "";
       const email = session.account.id
@@ -51,8 +73,19 @@ export class ParticipantStore {
       await this.saveParticipant({ githubUser: user, githubEmail: email });
       return { user, email };
     } catch {
-      return { user: "", email: "" };
+      return await this.gitConfigAsGitHubFallback();
     }
+  }
+
+  private async gitConfigAsGitHubFallback(): Promise<{ user: string; email: string }> {
+    const git = await this.tryFetchGitConfig();
+    if (git.name || git.email) {
+      await this.saveParticipant({
+        githubUser:  git.name,
+        githubEmail: git.email
+      });
+    }
+    return { user: git.name, email: git.email };
   }
 
   private async fetchGitHubEmail(token: string): Promise<string> {
