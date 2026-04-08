@@ -6,6 +6,8 @@ export interface Participant {
   email: string;
   githubUser: string;
   githubEmail: string;
+  gitName: string;
+  gitEmail: string;
 }
 
 export class ParticipantStore {
@@ -22,7 +24,9 @@ export class ParticipantStore {
       name:        this.context.globalState.get("wt.name", ""),
       email:       this.context.globalState.get("wt.email", ""),
       githubUser:  this.context.globalState.get("wt.githubUser", ""),
-      githubEmail: this.context.globalState.get("wt.githubEmail", "")
+      githubEmail: this.context.globalState.get("wt.githubEmail", ""),
+      gitName:     this.context.globalState.get("wt.gitName", ""),
+      gitEmail:    this.context.globalState.get("wt.gitEmail", "")
     };
   }
 
@@ -31,6 +35,8 @@ export class ParticipantStore {
     if (p.email      !== undefined) await this.context.globalState.update("wt.email", p.email);
     if (p.githubUser !== undefined) await this.context.globalState.update("wt.githubUser", p.githubUser);
     if (p.githubEmail!== undefined) await this.context.globalState.update("wt.githubEmail", p.githubEmail);
+    if (p.gitName    !== undefined) await this.context.globalState.update("wt.gitName", p.gitName);
+    if (p.gitEmail   !== undefined) await this.context.globalState.update("wt.gitEmail", p.gitEmail);
   }
 
   // ── Git config identity (always available in Codespaces) ─────
@@ -40,7 +46,10 @@ export class ParticipantStore {
       const name  = execSync("git config user.name",  { encoding: "utf8" }).trim();
       const email = execSync("git config user.email", { encoding: "utf8" }).trim();
 
-      // Auto-fill name/email if the user hasn't manually set them
+      // Store in dedicated git fields
+      await this.saveParticipant({ gitName: name, gitEmail: email });
+
+      // Also auto-fill the display name/email if the user hasn't manually set them
       const current = this.getParticipant();
       if (!current.name && name)   await this.saveParticipant({ name });
       if (!current.email && email) await this.saveParticipant({ email });
@@ -60,10 +69,7 @@ export class ParticipantStore {
         ["user:email", "read:user"],
         { createIfNone: false, silent: true }
       );
-      if (!session) {
-        // Fall back to git config
-        return await this.gitConfigAsGitHubFallback();
-      }
+      if (!session) return { user: "", email: "" };
 
       const user  = session.account.label ?? "";
       const email = session.account.id
@@ -73,19 +79,8 @@ export class ParticipantStore {
       await this.saveParticipant({ githubUser: user, githubEmail: email });
       return { user, email };
     } catch {
-      return await this.gitConfigAsGitHubFallback();
+      return { user: "", email: "" };
     }
-  }
-
-  private async gitConfigAsGitHubFallback(): Promise<{ user: string; email: string }> {
-    const git = await this.tryFetchGitConfig();
-    if (git.name || git.email) {
-      await this.saveParticipant({
-        githubUser:  git.name,
-        githubEmail: git.email
-      });
-    }
-    return { user: git.name, email: git.email };
   }
 
   private async fetchGitHubEmail(token: string): Promise<string> {

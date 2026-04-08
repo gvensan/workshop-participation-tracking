@@ -17,12 +17,15 @@ class WebhookReporter {
         const url = this.getWebhookUrl();
         if (!url)
             return; // silently skip if not configured
+        const p = event.participant;
         const payload = {
             workshop: this.getWorkshopName(),
             codespace: event.codespace,
-            githubUser: event.participant.githubUser || event.participant.name || "unknown",
-            name: event.participant.name || event.participant.githubUser || "",
-            email: event.participant.email || event.participant.githubEmail || "",
+            gitName: p.gitName,
+            gitEmail: p.gitEmail,
+            githubUser: p.githubUser,
+            name: p.name || p.gitName || p.githubUser || "unknown",
+            email: p.email || p.gitEmail || p.githubEmail || "",
             sectionId: event.section.id,
             sectionTitle: event.section.title,
             action: event.action
@@ -46,13 +49,16 @@ class WebhookReporter {
         const url = this.getWebhookUrl();
         if (!url)
             return;
+        const p = event.participant;
         const payload = {
             action: "reset",
             workshop: this.getWorkshopName(),
             codespace: event.codespace,
-            githubUser: event.participant.githubUser || event.participant.name || "unknown",
-            name: event.participant.name || event.participant.githubUser || "",
-            email: event.participant.email || event.participant.githubEmail || ""
+            gitName: p.gitName,
+            gitEmail: p.gitEmail,
+            githubUser: p.githubUser,
+            name: p.name || p.gitName || p.githubUser || "unknown",
+            email: p.email || p.gitEmail || p.githubEmail || ""
         };
         try {
             await fetch(url, {
