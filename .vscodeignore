@@ -1,0 +1,12 @@
+.vscode/**
+src/**
+google-apps-script/**
+node_modules/**
+**/*.ts
+**/*.map
+tsconfig.json
+workshop-tracker.zip
+ws-tracker-concept.md
+.DS_Store
+.claude/**
+{src,media}/**
