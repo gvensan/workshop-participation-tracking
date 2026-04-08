@@ -400,6 +400,8 @@ export class WorkshopPanel {
   const vscode    = acquireVsCodeApi();
   const sections  = ${sectionsJson};
 
+  let toggling = false;
+
   function esc(str) {
     return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
@@ -410,8 +412,8 @@ export class WorkshopPanel {
       <div class="section-item \${s.done ? "done" : ""}" id="section-\${s.id}">
         <div class="section-row">
           <input class="section-check" type="checkbox" \${s.done ? "checked" : ""}
-                 onclick="event.stopPropagation(); toggleSection('\${s.id}')" />
-          <div class="section-body" onclick="toggleSection('\${s.id}')">
+                 onclick="toggleSection('\${s.id}', event)" />
+          <div class="section-body" onclick="toggleSection('\${s.id}', event)">
             <div class="section-number">Section \${i + 1}</div>
             <div class="section-title">\${esc(s.title)}</div>
             \${s.description ? \`<div class="section-desc">\${esc(s.description)}</div>\` : ""}
@@ -433,21 +435,24 @@ export class WorkshopPanel {
     \`).join("");
   }
 
-  function toggleSection(id) {
+  function toggleSection(id, evt) {
+    if (evt) { evt.preventDefault(); evt.stopPropagation(); }
+    if (toggling) return;
+    toggling = true;
+
     const idx = sections.findIndex(x => x.id === id);
-    if (idx === -1) return;
+    if (idx === -1) { toggling = false; return; }
     const newState = !sections[idx].done;
 
     if (newState) {
-      // Cascade forward: mark all up to and including this one
       for (let i = 0; i <= idx; i++) sections[i].done = true;
     } else {
-      // Cascade backward: unmark this and all after it
       for (let i = idx; i < sections.length; i++) sections[i].done = false;
     }
 
     renderSections();
     vscode.postMessage({ type: "sectionToggle", sectionId: id, checked: newState });
+    setTimeout(() => { toggling = false; }, 300);
   }
 
   function confirmReset() {
