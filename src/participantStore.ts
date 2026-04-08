@@ -128,5 +128,22 @@ export class ParticipantStore {
 
   async resetProgress(): Promise<void> {
     await this.context.globalState.update("wt.completed", []);
+    await this.context.globalState.update("wt.feedback", {});
+  }
+
+  // ── Section feedback ─────────────────────────────────────────
+
+  getFeedback(): Record<string, string> {
+    return this.context.globalState.get<Record<string, string>>("wt.feedback", {});
+  }
+
+  getSectionFeedback(sectionId: string): string {
+    return this.getFeedback()[sectionId] || "";
+  }
+
+  async saveSectionFeedback(sectionId: string, feedback: string): Promise<void> {
+    const all = this.getFeedback();
+    all[sectionId] = feedback;
+    await this.context.globalState.update("wt.feedback", all);
   }
 }

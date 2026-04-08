@@ -5,7 +5,7 @@ import { Section } from "./sectionsLoader";
 export interface CompletionEvent {
   participant: Participant;
   section: Section;
-  action: "completed" | "unchecked";
+  action: "completed";
   codespace: string;
   workshop: string;
 }
@@ -34,7 +34,7 @@ export class WebhookReporter {
       gitName:      p.gitName,
       gitEmail:     p.gitEmail,
       githubUser:   p.githubUser,
-      name:         p.name  || p.gitName  || p.githubUser || "unknown",
+      name:         p.name  || p.gitName  || p.githubUser || "",
       email:        p.email || p.gitEmail || p.githubEmail || "",
       sectionId:    event.section.id,
       sectionTitle: event.section.title,
@@ -69,7 +69,7 @@ export class WebhookReporter {
       gitName:    p.gitName,
       gitEmail:   p.gitEmail,
       githubUser: p.githubUser,
-      name:       p.name  || p.gitName  || p.githubUser || "unknown",
+      name:       p.name  || p.gitName  || p.githubUser || "",
       email:      p.email || p.gitEmail || p.githubEmail || ""
     };
 
@@ -81,6 +81,73 @@ export class WebhookReporter {
       });
     } catch (err) {
       console.warn("[WorkshopTracker] Webhook reset failed:", err);
+    }
+  }
+
+  async reportDeleteSections(event: {
+    participant: Participant;
+    sections: Section[];
+    codespace: string;
+  }): Promise<void> {
+    const url = this.getWebhookUrl();
+    if (!url) return;
+
+    const p = event.participant;
+    const payload = {
+      action:     "deleteSections",
+      workshop:   this.getWorkshopName(),
+      codespace:  event.codespace,
+      gitName:    p.gitName,
+      gitEmail:   p.gitEmail,
+      githubUser: p.githubUser,
+      name:       p.name  || p.gitName  || p.githubUser || "",
+      email:      p.email || p.gitEmail || p.githubEmail || "",
+      sectionIds: event.sections.map(s => s.id)
+    };
+
+    try {
+      await fetch(url, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(payload)
+      });
+    } catch (err) {
+      console.warn("[WorkshopTracker] Webhook deleteSections failed:", err);
+    }
+  }
+
+  async reportFeedback(event: {
+    participant: Participant;
+    section: Section;
+    feedback: string;
+    codespace: string;
+  }): Promise<void> {
+    const url = this.getWebhookUrl();
+    if (!url) return;
+
+    const p = event.participant;
+    const payload = {
+      action:       "feedback",
+      workshop:     this.getWorkshopName(),
+      codespace:    event.codespace,
+      gitName:      p.gitName,
+      gitEmail:     p.gitEmail,
+      githubUser:   p.githubUser,
+      name:         p.name  || p.gitName  || p.githubUser || "",
+      email:        p.email || p.gitEmail || p.githubEmail || "",
+      sectionId:    event.section.id,
+      sectionTitle: event.section.title,
+      feedback:     event.feedback
+    };
+
+    try {
+      await fetch(url, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(payload)
+      });
+    } catch (err) {
+      console.warn("[WorkshopTracker] Webhook feedback failed:", err);
     }
   }
 

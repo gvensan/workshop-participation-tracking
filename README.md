@@ -6,11 +6,17 @@ A VS Code extension for tracking participant progress through guided workshop se
 
 ## How It Works
 
-- A **status bar item** (bottom right) always shows current progress: `✅ Progress: 3/8 sections`
+- A **status bar item** (bottom right) always shows current progress: `Progress: 3/8 sections`
 - Click it to open the **Workshop Tracker panel**
-- Participants enter their name & email (or GitHub identity is used as fallback)
-- Each section has a checkbox — checking it fires a real-time POST to Google Sheets
-- Progress persists across Codespace restarts
+- Participant name & email are auto-detected from `git config` (GitHub OAuth as secondary source)
+- Each section has a checkbox — checking a section **cascades** and marks all prior sections as done; unchecking cascades forward and unmarks all subsequent sections
+- Checking a section fires a real-time POST to Google Sheets; **unchecking deletes** the corresponding rows (no "unchecked" log)
+- Completed sections show a **Feedback** button inside the card — click to expand a textarea, submit, and the saved feedback shows inline (click to edit)
+- Feedback is written to a separate **"Feedback"** sheet in Google Sheets
+- Unchecking a section also clears its feedback (locally and from the Feedback sheet)
+- Resetting progress removes all of that participant's rows from both the Completions and Feedback sheets
+- A configurable **reminder notification** nudges participants to update progress at a set interval
+- Progress and feedback persist across Codespace restarts via `globalState`
 
 ---
 
@@ -43,7 +49,9 @@ Set the webhook URL in one of two ways:
 ```json
 {
   "workshopTracker.webhookUrl": "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec",
-  "workshopTracker.workshopName": "My Workshop Name"
+  "workshopTracker.workshopName": "My Workshop Name",
+  "workshopTracker.reminderEnabled": true,
+  "workshopTracker.reminderIntervalMinutes": 30
 }
 ```
 
@@ -72,7 +80,7 @@ Add to `.devcontainer/devcontainer.json`:
 ```bash
 npm install
 npm run compile
-vsce package        # produces workshop-tracker-1.0.0.vsix
+npx @vscode/vsce package --allow-missing-repository
 code --install-extension workshop-tracker-1.0.0.vsix
 ```
 
@@ -82,13 +90,24 @@ code --install-extension workshop-tracker-1.0.0.vsix
 
 Each completion creates a row:
 
-| Timestamp | Workshop | Codespace | GitHub User | Name | Email | Section ID | Section Title | Action |
-|---|---|---|---|---|---|---|---|---|
-| 2026-04-08T10:32:00Z | SAM Workshop | urban-disco-x1 | arun-gh | Arun K | arun@x.com | s3 | Publish Your First Event | completed |
+| Timestamp | Workshop | Codespace | Git User Name | Git Email | GitHub User | Name | Email | Section ID | Section Title | Action |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-04-08T10:32:00Z | SAM Workshop | urban-disco-x1 | Arun K | arun@x.com | arun-gh | Arun K | arun@x.com | s3 | Publish Your First Event | completed |
 
-- **Action** is `completed` or `unchecked` (if participant unchecks a section)
+- Only `completed` rows are stored — unchecking a section **deletes** its row instead of logging "unchecked"
+- **Git User Name / Git Email** are from `git config` — always available in Codespaces
+- **GitHub User** is from VS Code GitHub OAuth (empty if not authenticated)
+- **Name / Email** are auto-filled from git config
 - **Codespace** is the `CODESPACE_NAME` env variable — unique per participant
-- If name/email left blank, GitHub identity is used automatically
+- **Reset** deletes all rows matching that participant from both Completions and Feedback sheets
+
+### Feedback Sheet
+
+Per-section feedback is written to a separate **"Feedback"** sheet (auto-created on first submission):
+
+| Timestamp | Workshop | Codespace | Git User Name | Git Email | GitHub User | Name | Email | Section ID | Section Title | Feedback |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-04-08T11:15:00Z | SAM Workshop | urban-disco-x1 | Arun K | arun@x.com | arun-gh | Arun K | arun@x.com | s3 | Publish Your First Event | Clear instructions, worked on first try |
 
 ---
 
@@ -97,12 +116,25 @@ Each completion creates a row:
 | Command | Description |
 |---|---|
 | Click status bar | Open tracker panel |
-| `Workshop Tracker: Reset My Progress` | Clear all checkboxes (via Command Palette) |
+| `Workshop Tracker: Reset My Progress` | Clear all checkboxes, feedback, and remove rows from both sheets (via Command Palette) |
+
+---
+
+## Settings
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `workshopTracker.webhookUrl` | string | `""` | Google Apps Script Web App URL |
+| `workshopTracker.workshopName` | string | `"Solace Agent Mesh Workshop"` | Workshop name included in every event |
+| `workshopTracker.reminderEnabled` | boolean | `true` | Show periodic reminders to update progress |
+| `workshopTracker.reminderIntervalMinutes` | number | `30` | Minutes between reminders (minimum 1) |
+
+When reminders are enabled, a notification pops up at the configured interval showing current progress with an "Open Tracker" button. Reminders stop automatically once all sections are completed. Set `reminderEnabled` to `false` to disable.
 
 ---
 
 ## Data Identity Priority
 
-1. Name & email entered by participant (stored in VS Code globalState)
+1. `git config user.name` & `git config user.email` — auto-detected on activation, always available in Codespaces
 2. GitHub username + email from VS Code GitHub authentication (silent, non-intrusive)
-3. `CODESPACE_NAME` environment variable (always available in Codespaces)
+3. `CODESPACE_NAME` environment variable (always available in Codespaces, used for the Codespace column)

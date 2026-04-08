@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ParticipantStore, Participant } from "./participantStore";
+import { ParticipantStore } from "./participantStore";
 import { Section } from "./sectionsLoader";
 import { WebhookReporter } from "./webhookReporter";
 
@@ -41,7 +41,7 @@ export class WorkshopPanel {
     this.panel.webview.onDidReceiveMessage(msg => this.handleMessage(msg));
 
     this.render();
-    this.initGitHubIdentity();
+    this.initIdentity();
   }
 
   reveal() { this.panel.reveal(); }
@@ -57,14 +57,6 @@ export class WorkshopPanel {
 
   private async handleMessage(msg: any) {
     switch (msg.type) {
-
-      case "saveIdentity": {
-        await this.store.saveParticipant({
-          name:  msg.name,
-          email: msg.email
-        });
-        break;
-      }
 
       case "sectionToggle": {
         const sectionIdx = this.sections.findIndex(s => s.id === msg.sectionId);
@@ -87,20 +79,46 @@ export class WorkshopPanel {
           }
         } else {
           // Cascade: uncheck the toggled section and all sections after it
+          const uncheckedSections: Section[] = [];
           for (let i = sectionIdx; i < this.sections.length; i++) {
             const s = this.sections[i];
             if (this.store.isCompleted(s.id)) {
               await this.store.markUncompleted(s.id);
-              this.reporter.report({
-                participant, section: s, action: "unchecked",
-                codespace, workshop: ""
-              });
+              uncheckedSections.push(s);
             }
+            // Clear feedback for unchecked sections
+            if (this.store.getSectionFeedback(s.id)) {
+              await this.store.saveSectionFeedback(s.id, "");
+            }
+          }
+          // Delete the unchecked rows from the sheet
+          if (uncheckedSections.length > 0) {
+            this.reporter.reportDeleteSections({
+              participant,
+              sections: uncheckedSections,
+              codespace
+            });
           }
         }
 
         this.progressChangedEmitter.fire();
         this.render();
+        break;
+      }
+
+      case "sectionFeedback": {
+        const section = this.sections.find(s => s.id === msg.sectionId);
+        if (!section) break;
+
+        await this.store.saveSectionFeedback(msg.sectionId, msg.feedback);
+
+        const participant = this.store.getParticipant();
+        this.reporter.reportFeedback({
+          participant,
+          section,
+          feedback: msg.feedback,
+          codespace: WebhookReporter.getCodespaceName()
+        });
         break;
       }
 
@@ -122,29 +140,22 @@ export class WorkshopPanel {
 
   // ── GitHub identity init ─────────────────────────────────────
 
-  private async initGitHubIdentity() {
-    // First, pull git config (always available in Codespaces)
+  private async initIdentity() {
+    // Pull git config (always available in Codespaces)
     const git = await this.store.tryFetchGitConfig();
     if (git.name || git.email) {
       this.panel.webview.postMessage({
-        type:     "gitConfigIdentity",
-        gitName:  git.name,
-        gitEmail: git.email
+        type: "gitConfigIdentity", gitName: git.name, gitEmail: git.email
       });
     }
 
-    // Then try GitHub OAuth for the username
+    // Try GitHub OAuth for the username
     const gh = await this.store.tryFetchGitHubIdentity();
     if (gh.user) {
       this.panel.webview.postMessage({
-        type:        "githubIdentity",
-        githubUser:  gh.user,
-        githubEmail: gh.email
+        type: "githubIdentity", githubUser: gh.user, githubEmail: gh.email
       });
     }
-
-    // Re-render with populated fields
-    this.render();
   }
 
   // ── HTML render ──────────────────────────────────────────────
@@ -155,10 +166,12 @@ export class WorkshopPanel {
     const total       = this.sections.length;
     const doneCount   = completed.length;
 
+    const feedback = this.store.getFeedback();
     const sectionsJson = JSON.stringify(
       this.sections.map(s => ({
         ...s,
-        done: completed.includes(s.id)
+        done: completed.includes(s.id),
+        feedback: feedback[s.id] || ""
       }))
     );
 
@@ -174,9 +187,6 @@ export class WorkshopPanel {
     --bg:        var(--vscode-editor-background);
     --fg:        var(--vscode-editor-foreground);
     --border:    var(--vscode-panel-border);
-    --input-bg:  var(--vscode-input-background);
-    --input-fg:  var(--vscode-input-foreground);
-    --input-border: var(--vscode-input-border);
     --btn-bg:    var(--vscode-button-background);
     --btn-fg:    var(--vscode-button-foreground);
     --btn-hover: var(--vscode-button-hoverBackground);
@@ -221,30 +231,13 @@ export class WorkshopPanel {
     text-align: right;
   }
 
-  /* Identity card */
-  .card {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
+  /* Identity hint */
+  .identity-hint {
+    font-size: 0.8em;
+    opacity: 0.55;
     margin-bottom: 20px;
   }
-  .card h2 { font-size: 1em; margin-bottom: 12px; opacity: 0.8; }
-  .field { margin-bottom: 10px; }
-  .field label { display: block; font-size: 0.8em; opacity: 0.7; margin-bottom: 4px; }
-  .field input {
-    width: 100%;
-    padding: 6px 10px;
-    background: var(--input-bg);
-    color: var(--input-fg);
-    border: 1px solid var(--input-border, var(--border));
-    border-radius: 4px;
-    font-size: 0.95em;
-  }
-  .field input:focus { outline: 1px solid var(--accent); }
-  .gh-hint { font-size: 0.78em; opacity: 0.55; margin-top: 6px; }
 
-  /* Save button */
   .btn {
     padding: 6px 14px;
     background: var(--btn-bg);
@@ -264,9 +257,6 @@ export class WorkshopPanel {
     font-size: 0.8em;
   }
   .btn.ghost:hover { opacity: 1; }
-  .saved-flash { font-size: 0.8em; color: var(--success); margin-left: 8px; opacity: 0; transition: opacity 0.3s; }
-  .saved-flash.show { opacity: 1; }
-
   /* Sections */
   .sections-header {
     display: flex;
@@ -277,20 +267,23 @@ export class WorkshopPanel {
   .sections-header h2 { font-size: 1em; opacity: 0.8; }
 
   .section-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 12px 14px;
     background: var(--card-bg);
     border: 1px solid var(--border);
     border-radius: 8px;
     margin-bottom: 8px;
-    cursor: pointer;
+    padding: 12px 14px;
     transition: border-color 0.2s;
   }
   .section-item:hover { border-color: var(--accent); }
-  .section-item.done { opacity: 0.65; }
+  .section-item.done { opacity: 0.75; }
   .section-item.done .section-title { text-decoration: line-through; }
+
+  .section-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    cursor: pointer;
+  }
 
   .section-check {
     width: 18px;
@@ -306,15 +299,67 @@ export class WorkshopPanel {
   .section-title  { font-size: 0.95em; font-weight: 500; margin-bottom: 2px; }
   .section-desc   { font-size: 0.8em; opacity: 0.6; }
 
-  .done-badge {
-    font-size: 0.75em;
-    background: var(--success);
-    color: white;
-    padding: 2px 8px;
-    border-radius: 10px;
+  .section-badges {
+    display: flex;
+    gap: 6px;
     flex-shrink: 0;
     align-self: center;
   }
+
+  .done-badge, .fb-btn {
+    font-size: 0.75em;
+    padding: 2px 8px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    border: none;
+    cursor: pointer;
+  }
+  .done-badge {
+    background: var(--success);
+    color: white;
+  }
+  .fb-btn {
+    background: var(--accent);
+    color: white;
+    opacity: 0.8;
+  }
+  .fb-btn:hover { opacity: 1; }
+  .fb-btn.has-feedback {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    opacity: 0.6;
+  }
+  .fb-btn.has-feedback:hover { opacity: 1; }
+
+  /* Feedback area inside card */
+  .fb-area { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .fb-area textarea {
+    width: 100%;
+    min-height: 60px;
+    padding: 6px 8px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: var(--vscode-font-family);
+    font-size: 0.85em;
+    resize: vertical;
+  }
+  .fb-area textarea:focus { outline: 1px solid var(--accent); }
+  .fb-actions { margin-top: 6px; display: flex; align-items: center; gap: 8px; }
+  .fb-text { font-size: 0.85em; opacity: 0.7; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .fb-text-label { font-size: 0.7em; opacity: 0.5; margin-bottom: 3px; }
+  .fb-flash { font-size: 0.8em; color: var(--success); opacity: 0; transition: opacity 0.3s; }
+  .fb-flash.show { opacity: 1; }
+
+  .btn.danger {
+    background: #d32f2f;
+    color: white;
+    font-size: 0.8em;
+  }
+  .btn.danger:hover { background: #b71c1c; }
+  .confirm-msg { font-size: 0.8em; opacity: 0.7; margin-right: 8px; }
 
   .footer { margin-top: 24px; text-align: center; opacity: 0.4; font-size: 0.75em; }
 </style>
@@ -333,32 +378,18 @@ export class WorkshopPanel {
   ${doneCount} of ${total} sections completed
 </div>
 
-<!-- Identity -->
-<div class="card">
-  <h2>👤 Your Details</h2>
-  <div class="field">
-    <label>Name</label>
-    <input id="inputName" type="text" placeholder="Your full name"
-           value="${escapeHtml(participant.name)}" />
-  </div>
-  <div class="field">
-    <label>Email</label>
-    <input id="inputEmail" type="email" placeholder="your@email.com"
-           value="${escapeHtml(participant.email)}" />
-  </div>
-  <button class="btn" onclick="saveIdentity()">Save</button>
-  <span class="saved-flash" id="savedFlash">✓ Saved</span>
-  <p class="gh-hint" id="ghHint">
-    ${participant.githubUser
-      ? `GitHub: <strong>${escapeHtml(participant.githubUser)}</strong> — used as fallback if name/email left blank`
-      : "GitHub identity will be detected automatically as fallback"}
-  </p>
-</div>
+<p class="identity-hint" id="identityHint">
+  ${participant.gitName || participant.githubUser
+    ? `Tracking as: <strong>${escapeHtml(participant.gitName || participant.githubUser)}</strong>${participant.gitEmail ? ` &lt;${escapeHtml(participant.gitEmail)}&gt;` : ""}`
+    : "Detecting identity from git config..."}
+</p>
 
 <!-- Sections -->
 <div class="sections-header">
   <h2>📋 Workshop Sections</h2>
-  <button class="btn ghost" onclick="resetProgress()">Reset progress</button>
+  <span id="resetWrap">
+    <button class="btn ghost" onclick="confirmReset()">Reset progress</button>
+  </span>
 </div>
 
 <div id="sectionsList"></div>
@@ -376,15 +407,28 @@ export class WorkshopPanel {
   function renderSections() {
     const list = document.getElementById("sectionsList");
     list.innerHTML = sections.map((s, i) => \`
-      <div class="section-item \${s.done ? "done" : ""}" onclick="toggleSection('\${s.id}')">
-        <input class="section-check" type="checkbox" \${s.done ? "checked" : ""}
-               onclick="event.stopPropagation(); toggleSection('\${s.id}')" />
-        <div class="section-body">
-          <div class="section-number">Section \${i + 1}</div>
-          <div class="section-title">\${esc(s.title)}</div>
-          \${s.description ? \`<div class="section-desc">\${esc(s.description)}</div>\` : ""}
+      <div class="section-item \${s.done ? "done" : ""}" id="section-\${s.id}">
+        <div class="section-row">
+          <input class="section-check" type="checkbox" \${s.done ? "checked" : ""}
+                 onclick="event.stopPropagation(); toggleSection('\${s.id}')" />
+          <div class="section-body" onclick="toggleSection('\${s.id}')">
+            <div class="section-number">Section \${i + 1}</div>
+            <div class="section-title">\${esc(s.title)}</div>
+            \${s.description ? \`<div class="section-desc">\${esc(s.description)}</div>\` : ""}
+          </div>
+          <div class="section-badges">
+            \${s.done ? '<span class="done-badge">Done</span>' : ""}
+            \${s.done ? \`<button class="fb-btn \${s.feedback ? "has-feedback" : ""}"
+                          onclick="event.stopPropagation(); toggleFeedback('\${s.id}')">
+                          \${s.feedback ? "Feedback" : "Feedback"}
+                        </button>\` : ""}
+          </div>
         </div>
-        \${s.done ? '<span class="done-badge">✓ Done</span>' : ""}
+        <div class="fb-area" id="fb-area-\${s.id}" style="display:none;"></div>
+        \${s.done && s.feedback ? \`<div class="fb-text" id="fb-text-\${s.id}" onclick="toggleFeedback('\${s.id}')">
+          <div class="fb-text-label">Your feedback:</div>
+          \${esc(s.feedback)}
+        </div>\` : ""}
       </div>
     \`).join("");
   }
@@ -406,44 +450,91 @@ export class WorkshopPanel {
     vscode.postMessage({ type: "sectionToggle", sectionId: id, checked: newState });
   }
 
-  function saveIdentity() {
-    const name  = document.getElementById("inputName").value.trim();
-    const email = document.getElementById("inputEmail").value.trim();
-    vscode.postMessage({ type: "saveIdentity", name, email });
-    const flash = document.getElementById("savedFlash");
-    flash.classList.add("show");
-    setTimeout(() => flash.classList.remove("show"), 2000);
+  function confirmReset() {
+    const wrap = document.getElementById("resetWrap");
+    wrap.innerHTML =
+      '<span class="confirm-msg">Are you sure?</span>' +
+      '<button class="btn danger" onclick="doReset()">Yes, reset</button> ' +
+      '<button class="btn ghost" onclick="cancelReset()">Cancel</button>';
   }
 
-  function resetProgress() {
-    if (confirm("Reset all progress? This cannot be undone.")) {
-      vscode.postMessage({ type: "resetProgress" });
+  function doReset() {
+    vscode.postMessage({ type: "resetProgress" });
+  }
+
+  function cancelReset() {
+    const wrap = document.getElementById("resetWrap");
+    wrap.innerHTML = '<button class="btn ghost" onclick="confirmReset()">Reset progress</button>';
+  }
+
+  function toggleFeedback(sectionId) {
+    const area = document.getElementById("fb-area-" + sectionId);
+    const textDiv = document.getElementById("fb-text-" + sectionId);
+    if (!area) return;
+
+    if (area.style.display !== "none") {
+      area.style.display = "none";
+      if (textDiv) textDiv.style.display = "";
+      return;
+    }
+
+    // Hide the saved text, show the form
+    if (textDiv) textDiv.style.display = "none";
+
+    const s = sections.find(x => x.id === sectionId);
+    const existing = s ? (s.feedback || "") : "";
+    area.style.display = "block";
+    area.innerHTML =
+      '<textarea id="fb-input-' + sectionId + '" placeholder="Share your feedback for this section...">' + esc(existing) + '</textarea>' +
+      '<div class="fb-actions">' +
+        '<button class="btn" onclick="submitSectionFeedback(\\'' + sectionId + '\\')">Submit</button>' +
+        '<button class="btn ghost" onclick="closeFeedback(\\'' + sectionId + '\\')">Cancel</button>' +
+        '<span class="fb-flash" id="fb-flash-' + sectionId + '"></span>' +
+      '</div>';
+    area.querySelector("textarea").focus();
+  }
+
+  function closeFeedback(sectionId) {
+    const area = document.getElementById("fb-area-" + sectionId);
+    const textDiv = document.getElementById("fb-text-" + sectionId);
+    if (area) area.style.display = "none";
+    if (textDiv) textDiv.style.display = "";
+  }
+
+  function submitSectionFeedback(sectionId) {
+    const ta = document.getElementById("fb-input-" + sectionId);
+    if (!ta) return;
+    const text = ta.value.trim();
+    if (!text) return;
+
+    const s = sections.find(x => x.id === sectionId);
+    if (s) s.feedback = text;
+
+    vscode.postMessage({ type: "sectionFeedback", sectionId: sectionId, feedback: text });
+
+    const flash = document.getElementById("fb-flash-" + sectionId);
+    if (flash) {
+      flash.textContent = "Sent!";
+      flash.classList.add("show");
+      setTimeout(() => {
+        flash.classList.remove("show");
+        renderSections();
+      }, 1500);
     }
   }
 
-  // Enter key saves identity
-  ["inputName","inputEmail"].forEach(id => {
-    document.getElementById(id)?.addEventListener("keydown", e => {
-      if (e.key === "Enter") saveIdentity();
-    });
-  });
-
-  // Messages from extension host
+  // Messages from extension host — update identity hint after async fetch
   window.addEventListener("message", e => {
     const msg = e.data;
+    const hint = document.getElementById("identityHint");
+    if (!hint) return;
 
-    if (msg.type === "gitConfigIdentity") {
-      const nameInput = document.getElementById("inputName");
-      const emailInput = document.getElementById("inputEmail");
-      if (nameInput && !nameInput.value)  nameInput.value = msg.gitName  || "";
-      if (emailInput && !emailInput.value) emailInput.value = msg.gitEmail || "";
-      document.getElementById("ghHint").innerHTML =
-        \`Git: <strong>\${msg.gitName}</strong> &lt;\${msg.gitEmail}&gt; — auto-detected from git config\`;
+    if (msg.type === "gitConfigIdentity" && (msg.gitName || msg.gitEmail)) {
+      hint.innerHTML = \`Tracking as: <strong>\${esc(msg.gitName)}</strong>\${msg.gitEmail ? " &lt;" + esc(msg.gitEmail) + "&gt;" : ""}\`;
     }
 
-    if (msg.type === "githubIdentity") {
-      document.getElementById("ghHint").innerHTML =
-        \`GitHub: <strong>\${msg.githubUser}</strong> — used as fallback if name/email left blank\`;
+    if (msg.type === "githubIdentity" && msg.githubUser) {
+      hint.innerHTML = \`Tracking as: <strong>\${esc(msg.githubUser)}</strong>\${msg.githubEmail ? " &lt;" + esc(msg.githubEmail) + "&gt;" : ""}\`;
     }
   });
 

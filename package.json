@@ -31,6 +31,17 @@
           "type": "string",
           "default": "Solace Agent Mesh Workshop",
           "description": "Workshop name included in every completion event"
+        },
+        "workshopTracker.reminderEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a periodic reminder to update progress"
+        },
+        "workshopTracker.reminderIntervalMinutes": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "description": "Interval in minutes between progress reminders"
         }
       }
     }

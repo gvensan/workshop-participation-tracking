@@ -6,6 +6,7 @@ import { WebhookReporter } from "./webhookReporter";
 
 let statusBarItem: vscode.StatusBarItem;
 let panel: WorkshopPanel | undefined;
+let reminderTimer: ReturnType<typeof setInterval> | undefined;
 
 export async function activate(context: vscode.ExtensionContext) {
   const store = new ParticipantStore(context);
@@ -77,6 +78,19 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   });
   context.subscriptions.push(watcher);
+
+  // ── Progress Reminder ───────────────────────────────────────
+  startReminder(store, sectionsLoader);
+
+  // Restart the timer if settings change
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration("workshopTracker.reminderEnabled") ||
+          e.affectsConfiguration("workshopTracker.reminderIntervalMinutes")) {
+        startReminder(store, sectionsLoader);
+      }
+    })
+  );
 }
 
 async function updateStatusBar(
@@ -100,4 +114,43 @@ async function updateStatusBar(
   }
 }
 
-export function deactivate() {}
+function startReminder(store: ParticipantStore, loader: SectionsLoader) {
+  // Clear any existing timer
+  if (reminderTimer) {
+    clearInterval(reminderTimer);
+    reminderTimer = undefined;
+  }
+
+  const config = vscode.workspace.getConfiguration("workshopTracker");
+  const enabled = config.get<boolean>("reminderEnabled", true);
+  if (!enabled) return;
+
+  const minutes = config.get<number>("reminderIntervalMinutes", 30);
+  const ms = minutes * 60 * 1000;
+
+  reminderTimer = setInterval(async () => {
+    const sections = await loader.load();
+    const completed = store.getCompletedCount();
+    const total = sections.length;
+
+    // Don't remind if all sections are done
+    if (total > 0 && completed >= total) return;
+
+    const choice = await vscode.window.showInformationMessage(
+      `Workshop Tracker: You've completed ${completed}/${total} sections. Don't forget to update your progress!`,
+      "Open Tracker",
+      "Dismiss"
+    );
+
+    if (choice === "Open Tracker") {
+      vscode.commands.executeCommand("workshopTracker.openPanel");
+    }
+  }, ms);
+}
+
+export function deactivate() {
+  if (reminderTimer) {
+    clearInterval(reminderTimer);
+    reminderTimer = undefined;
+  }
+}
